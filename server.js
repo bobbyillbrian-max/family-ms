@@ -12,14 +12,14 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173'],
+  origin: ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173', 'https://venerable-croissant-294cb9.netlify.app'],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/family-management';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://family-user:SecurePass123@cluster0.mongodb.net/family-management?retryWrites=true&w=majority';
 
 console.log('Connecting to MongoDB...');
 mongoose.connect(MONGODB_URI, {
