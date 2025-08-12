@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const GridFSBucket = require('mongodb').GridFSBucket;
+const { GridFSBucket } = require('mongodb');
 const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
@@ -11,13 +11,27 @@ require('dotenv').config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173'],
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/family-management';
-mongoose.connect(MONGODB_URI);
+
+console.log('Connecting to MongoDB...');
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => {
+  console.log('Successfully connected to MongoDB');
+})
+.catch((error) => {
+  console.error('MongoDB connection error:', error);
+});
 
 const conn = mongoose.connection;
 let gfsBucket;
@@ -25,6 +39,10 @@ let gfsBucket;
 conn.once('open', () => {
   console.log('Connected to MongoDB');
   gfsBucket = new GridFSBucket(conn.db, { bucketName: 'uploads' });
+});
+
+conn.on('error', (error) => {
+  console.error('MongoDB connection error:', error);
 });
 
 // Family Schema
@@ -107,12 +125,22 @@ const upload = multer({
   }
 });
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', message: 'Server is running' });
+});
+
 // Routes
 
 // Family Registration
 app.post('/api/families/register', async (req, res) => {
   try {
+    console.log('Family registration request:', req.body);
     const { family_name, password, admin_name, admin_relationship, admin_has_children, admin_password } = req.body;
+
+    if (!family_name || !password || !admin_name || !admin_relationship || !admin_password) {
+      return res.status(400).json({ error: 'All required fields must be provided' });
+    }
 
     // Check if family name already exists
     const existingFamily = await Family.findOne({ family_name });
@@ -130,6 +158,7 @@ app.post('/api/families/register', async (req, res) => {
     });
 
     const savedFamily = await family.save();
+    console.log('Family created:', savedFamily._id);
 
     // Hash admin password
     const adminPasswordHash = await bcrypt.hash(admin_password, 12);
@@ -145,6 +174,7 @@ app.post('/api/families/register', async (req, res) => {
     });
 
     const savedAdmin = await admin.save();
+    console.log('Admin user created:', savedAdmin._id);
 
     // Add admin to family admin_ids
     savedFamily.admin_ids.push(savedAdmin._id);
@@ -164,20 +194,28 @@ app.post('/api/families/register', async (req, res) => {
 // Family Login
 app.post('/api/families/login', async (req, res) => {
   try {
+    console.log('Family login request:', req.body);
     const { family_name, password } = req.body;
+
+    if (!family_name || !password) {
+      return res.status(400).json({ error: 'Family name and password are required' });
+    }
 
     const family = await Family.findOne({ family_name });
     if (!family) {
+      console.log('Family not found:', family_name);
       return res.status(400).json({ error: 'Family not found' });
     }
 
     const isMatch = await bcrypt.compare(password, family.password_hash);
     if (!isMatch) {
+      console.log('Invalid password for family:', family_name);
       return res.status(400).json({ error: 'Invalid password' });
     }
 
     // Get family members
     const members = await User.find({ family_id: family._id }).select('-password_hash');
+    console.log('Family login successful:', family_name, 'Members:', members.length);
 
     res.json({
       family: {
@@ -196,15 +234,22 @@ app.post('/api/families/login', async (req, res) => {
 // User Login
 app.post('/api/users/login', async (req, res) => {
   try {
+    console.log('User login request:', req.body);
     const { user_id, password } = req.body;
+
+    if (!user_id || !password) {
+      return res.status(400).json({ error: 'User ID and password are required' });
+    }
 
     const user = await User.findById(user_id);
     if (!user) {
+      console.log('User not found:', user_id);
       return res.status(400).json({ error: 'User not found' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      console.log('Invalid password for user:', user_id);
       return res.status(400).json({ error: 'Invalid password' });
     }
 
@@ -216,6 +261,8 @@ app.post('/api/users/login', async (req, res) => {
 
     const userWithoutPassword = { ...user.toObject() };
     delete userWithoutPassword.password_hash;
+
+    console.log('User login successful:', user.full_name);
 
     res.json({
       token,
@@ -230,7 +277,12 @@ app.post('/api/users/login', async (req, res) => {
 // Create User Profile
 app.post('/api/users/create', async (req, res) => {
   try {
+    console.log('Create user request:', req.body);
     const { family_id, full_name, relationship, has_children, date_of_birth, password } = req.body;
+
+    if (!family_id || !full_name || !relationship || !password) {
+      return res.status(400).json({ error: 'All required fields must be provided' });
+    }
 
     // Validate password
     if (password.length < 6 || !/\d/.test(password)) {
@@ -249,6 +301,7 @@ app.post('/api/users/create', async (req, res) => {
     });
 
     const savedUser = await user.save();
+    console.log('User created:', savedUser._id);
 
     const userWithoutPassword = { ...savedUser.toObject() };
     delete userWithoutPassword.password_hash;
@@ -422,6 +475,13 @@ app.get('/api/families/:family_id/shared-documents', authenticateToken, async (r
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('Unhandled error:', error);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Health check available at http://localhost:${PORT}/api/health`);
 });
